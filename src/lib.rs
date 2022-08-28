@@ -144,11 +144,6 @@ mod tests {
 
         drop(writer);
 
-        println!(
-            "Filenames: {} {}",
-            source_file_name, destination_folder_name
-        );
-
         let file = fs::OpenOptions::new()
             .read(true)
             .open(&source_file_name)

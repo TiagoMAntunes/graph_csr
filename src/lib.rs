@@ -1,10 +1,9 @@
-use std::{
-    fs::{self, File},
-    io::{BufRead, BufReader, BufWriter, Write},
-    str::FromStr,
-};
+use std::io::{BufRead, BufReader, Read};
 
 use easy_mmap::{self, EasyMmap, EasyMmapBuilder};
+
+mod reading;
+mod util;
 
 /// This structure holds a graph in the Compressed Sparse Row format for compression of data size.
 /// This graph is represented via Memory Mapping, allowing the graph to be loaded into memory as required.
@@ -12,43 +11,6 @@ use easy_mmap::{self, EasyMmap, EasyMmapBuilder};
 pub struct Graph<'a, N> {
     nodes: EasyMmap<'a, N>,
     edges: EasyMmap<'a, N>,
-}
-
-pub trait GraphType: Copy + FromStr + std::cmp::PartialOrd + std::ops::Add<Output = Self> {
-    fn zero() -> Self;
-    fn one() -> Self;
-    fn serialize(&self) -> Vec<u8>;
-    fn count(&self) -> usize;
-}
-
-impl GraphType for u64 {
-    fn zero() -> Self {
-        0
-    }
-    fn one() -> Self {
-        1
-    }
-    fn serialize(&self) -> Vec<u8> {
-        Vec::from(self.to_ne_bytes())
-    }
-    fn count(&self) -> usize {
-        *self as usize
-    }
-}
-
-impl GraphType for u32 {
-    fn zero() -> Self {
-        0
-    }
-    fn one() -> Self {
-        1
-    }
-    fn serialize(&self) -> Vec<u8> {
-        Vec::from(self.to_ne_bytes())
-    }
-    fn count(&self) -> usize {
-        *self as usize
-    }
 }
 
 /// The errors that can occur from using this library
@@ -66,154 +28,67 @@ pub enum GraphError {
 
 impl<'a, N> Graph<'a, N>
 where
-    N: GraphType + std::fmt::Display,
+    N: util::ValidGraphType + std::fmt::Display,
     N: 'a,
 {
-    fn get_file(folder_name: &str, file_name: &str) -> Result<File, GraphError> {
-        match fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(format!("{}/{}", folder_name, file_name))
-        {
-            Ok(file) => Ok(file),
-            Err(_) => Err(GraphError::ErrOpeningFile),
-        }
-    }
+    /// Convenience method for reading an input stream in text format.
+    /// Each line should contain two numbers, separated by a space.
+    pub fn from_txt_adjacency_list<T>(
+        stream: T,
+        folder_name: &str,
+    ) -> Result<Graph<'a, N>, GraphError>
+    where
+        T: Read + Sized,
+    {
+        let reader = BufReader::new(stream);
+        let stream = reader.lines().map(|line| {
+            let line = line?;
+            let mut parts = line.split_whitespace();
 
-    fn get_node_file(folder_name: &str) -> Result<File, GraphError> {
-        // Self::create_writer(folder_name, "vertex.csr")
-        Self::get_file(folder_name, "vertex.csr")
-    }
+            let src = parts
+                .next()
+                .ok_or(std::io::ErrorKind::InvalidData)?
+                .parse::<N>()
+                .or(Err(std::io::ErrorKind::InvalidData))?;
 
-    fn get_edge_file(folder_name: &str) -> Result<File, GraphError> {
-        Self::get_file(folder_name, "edge.csr")
+            let dst = parts
+                .next()
+                .ok_or(std::io::ErrorKind::InvalidData)?
+                .parse::<N>()
+                .or(Err(std::io::ErrorKind::InvalidData))?;
+
+            std::io::Result::Ok((src, dst))
+        });
+        Graph::from_adjacency_list(stream, folder_name)
     }
 
     /// Given a SORTED (by source) adjancency list file `source_file_name`, transforms this file
     /// into the underlying binary representation in CSR and returns a version of the Graph in this format
-    pub fn from_txt_adjancency(
-        source_file_name: &str,
-        destination_folder_name: &str,
-    ) -> Result<Graph<'a, N>, GraphError> {
-        let source_file = match fs::OpenOptions::new().read(true).open(source_file_name) {
-            Ok(f) => Ok(f),
-            Err(_) => Err(GraphError::ErrOpeningFile),
-        }?;
-
-        let reader = BufReader::new(source_file);
-
-        // Create directory if does not exist
-        match fs::create_dir(destination_folder_name) {
-            Ok(_) => Ok(()),
-            Err(_) => Err(GraphError::FsError),
-        }?;
-
-        // Create the files and buffers to write the data to
-        let nodes_file = Self::get_node_file(destination_folder_name)?;
-        let edges_file = Self::get_edge_file(destination_folder_name)?;
-        let mut nodes_writer = BufWriter::new(&nodes_file);
-        let mut edges_writer = BufWriter::new(&edges_file);
-
-        let mut previous_node = N::zero();
-        let mut edges_count = N::zero();
-        let mut max = N::zero();
-
-        nodes_writer.write(&N::zero().serialize()).expect("Failed to write first node");
-
-        for line in reader.lines() {
-            let line = match line {
-                Ok(line) => Ok(line),
-                Err(_) => Err(GraphError::ParseError),
+    pub fn from_adjacency_list<T>(stream: T, folder_name: &str) -> Result<Graph<'a, N>, GraphError>
+    where
+        T: Iterator<Item = std::io::Result<(N, N)>> + Sized,
+    {
+        let reading::GraphFiles(vertex_file, edge_file, n_vertex, n_edges) =
+            match reading::from_adjacency_list::<N, T>(stream, folder_name) {
+                Ok(g) => Ok(g),
+                Err(e) => match e.kind() {
+                    std::io::ErrorKind::InvalidData => Err(GraphError::ParseError),
+                    _ => Err(GraphError::LoadError),
+                },
             }?;
 
-            // Parse the two values into the correct format
-            let (src, dst): (N, N) = match line.split_whitespace().collect::<Vec<_>>().as_slice() {
-                [src, dst] => {
-                    let src = match src.parse::<N>() {
-                        Ok(src) => Ok(src),
-                        Err(_) => Err(GraphError::ParseError),
-                    }?;
-                    let dst = match dst.parse::<N>() {
-                        Ok(dst) => Ok(dst),
-                        Err(_) => Err(GraphError::ParseError),
-                    }?;
-                    (src, dst)
-                }
-                _ => {
-                    return Err(GraphError::ParseError);
-                }
-            };
+        let nodes = EasyMmapBuilder::<N>::new()
+            .file(vertex_file)
+            .readable()
+            .capacity(n_vertex)
+            .build();
+        let edges = EasyMmapBuilder::<N>::new()
+            .file(edge_file)
+            .readable()
+            .capacity(n_edges)
+            .build();
 
-            if max < dst {
-                max = dst;
-            }
-
-            // Check if sorted by source
-            if src < previous_node {
-                return Err(GraphError::ParseError);
-            }
-
-            // Write edge to edge list
-            match edges_writer.write(&dst.serialize()) {
-                Ok(_) => Ok(()),
-                Err(_) => Err(GraphError::LoadError),
-            }?;
-
-            while previous_node < src {
-                previous_node = previous_node + N::one();
-                // Write node size to nodes
-                println!("{}", edges_count);
-                match nodes_writer.write(&edges_count.serialize()) {
-                    Ok(_) => Ok(()),
-                    Err(_) => Err(GraphError::LoadError),
-                }?;
-            }
-
-            edges_count = edges_count + N::one();
-            previous_node = src;
-        }
-
-        let max = max + N::one();
-
-        // Add nodes until we reach the max node
-        while previous_node < max {
-            previous_node = previous_node + N::one();
-            // Write node size to nodes
-            println!("{}", edges_count);
-            match nodes_writer.write(&edges_count.serialize()) {
-                Ok(_) => Ok(()),
-                Err(_) => Err(GraphError::LoadError),
-            }?;
-        }
-
-        // Write the last node
-        println!("{}", edges_count);
-
-        match edges_writer.flush() {
-            Ok(_) => Ok(()),
-            Err(_) => Err(GraphError::LoadError),
-        }?;
-        match nodes_writer.flush() {
-            Ok(_) => Ok(()),
-            Err(_) => Err(GraphError::LoadError),
-        }?;
-        drop(edges_writer);
-        drop(nodes_writer);
-
-        // Create final graph
-        Ok(Graph {
-            nodes: EasyMmapBuilder::new()
-                .readable()
-                .capacity(max.count() + 1usize)
-                .file(nodes_file)
-                .build(),
-            edges: EasyMmapBuilder::new()
-                .readable()
-                .capacity(edges_count.count())
-                .file(edges_file)
-                .build(),
-        })
+        Ok(Graph { nodes, edges })
     }
 
     /// Same as `from_txt_adjacency`, except this time it assumes the edge list to be in binary representation
@@ -239,12 +114,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use core::panic;
+    use std::io::{BufWriter, Write};
+    use std::fs;
 
     use super::*;
 
     #[test]
-    fn test_basic_parse() {
+    fn parse_from_file() {
         let edges = vec![(0u32, 1u32), (0, 2), (1, 5), (1, 2), (4, 7)];
 
         let expected_nodes = vec![0u32, 2, 4, 4, 4, 5, 5, 5, 5];
@@ -273,13 +149,51 @@ mod tests {
             source_file_name, destination_folder_name
         );
 
-        let graph =
-            match Graph::<u32>::from_txt_adjancency(&source_file_name, &destination_folder_name) {
-                Ok(graph) => graph,
-                Err(e) => panic!("{:?}", e),
-            };
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .open(&source_file_name)
+            .unwrap();
+
+        let graph = match Graph::<u32>::from_txt_adjacency_list(file, &destination_folder_name) {
+            Ok(graph) => graph,
+            Err(e) => panic!("{:?}", e),
+        };
 
         // Check correctness
+        assert_eq!(
+            graph
+                .iterate_nodes()
+                .map(|x| x.clone())
+                .collect::<Vec<u32>>(),
+            expected_nodes
+        );
+        assert_eq!(
+            graph
+                .iterate_edges()
+                .map(|x| x.clone())
+                .collect::<Vec<u32>>(),
+            expected_edges
+        );
+    }
+
+    #[test]
+    fn parse_from_general_stream() {
+        let edges = vec![(0u32, 1u32), (0, 2), (1, 5), (1, 2), (4, 7)];
+
+        let expected_nodes = vec![0u32, 2, 4, 4, 4, 5, 5, 5, 5];
+        let expected_edges = vec![1u32, 2, 5, 2, 7];
+
+        let destination_folder_name = format!("/tmp/tmp_dst_{}", rand::random::<u32>());
+
+        // Read from string bytes stream
+        let graph = match Graph::<u32>::from_adjacency_list(
+            edges.iter().map(|x| Ok(x.clone())),
+            &destination_folder_name,
+        ) {
+            Ok(graph) => graph,
+            Err(e) => panic!("{:?}", e),
+        };
+
         assert_eq!(
             graph
                 .iterate_nodes()

@@ -2,6 +2,7 @@ use std::io::{BufRead, BufReader, Read};
 
 use easy_mmap::{self, EasyMmap, EasyMmapBuilder};
 use reading::reader_to_iter;
+use util::ValidGraphType;
 
 mod reading;
 mod util;
@@ -10,7 +11,7 @@ mod util;
 /// This graph is represented via Memory Mapping, allowing the graph to be loaded into memory as required.
 /// This makes it possible to load any-size graphs, even those that *do not* fit into memory!
 pub struct Graph<'a, N> {
-    nodes: EasyMmap<'a, N>,
+    nodes: EasyMmap<'a, usize>,
     edges: EasyMmap<'a, N>,
 }
 
@@ -29,7 +30,7 @@ pub enum GraphError {
 
 impl<'a, N> Graph<'a, N>
 where
-    N: util::ValidGraphType + std::fmt::Display,
+    N: util::ValidGraphType,
     N: 'a,
 {
     /// Convenience method for reading an input stream in text format.
@@ -78,7 +79,7 @@ where
                 },
             }?;
 
-        let nodes = EasyMmapBuilder::<N>::new()
+        let nodes = EasyMmapBuilder::<usize>::new()
             .file(vertex_file)
             .readable()
             .capacity(n_vertex)
@@ -113,7 +114,7 @@ where
                 },
             }?;
 
-        let nodes = EasyMmapBuilder::<N>::new()
+        let nodes = EasyMmapBuilder::<usize>::new()
             .file(vertex_file)
             .readable()
             .capacity(n_vertex)
@@ -132,13 +133,13 @@ where
         let nodes_file = reading::get_vertex_file(graph_folder).or(Err(GraphError::FsError))?;
         let edges_file = reading::get_edge_file(graph_folder).or(Err(GraphError::FsError))?;
 
-        let nodes = EasyMmapBuilder::<N>::new()
+        let nodes = EasyMmapBuilder::<usize>::new()
             .capacity(
                 nodes_file
                     .metadata()
                     .expect("Failed to read metadata of vertex file")
                     .len() as usize
-                    / std::mem::size_of::<N>(),
+                    / std::mem::size_of::<usize>(),
             )
             .file(nodes_file)
             .readable()
@@ -159,12 +160,56 @@ where
         Ok(Graph { nodes, edges })
     }
 
-    pub fn iterate_nodes(&self) -> std::slice::Iter<'_, N> {
-        self.nodes.iter()
+    pub fn iter(&'a self) -> GraphIterator<'a, N> {
+        GraphIterator {
+            graph: self,
+            current_node: 0,
+        }
     }
 
-    pub fn iterate_edges(&self) -> std::slice::Iter<'_, N> {
-        self.edges.iter()
+    #[inline]
+    #[allow(dead_code)]
+    fn iterate_nodes(&'a self) -> impl Iterator<Item = usize> + 'a {
+        self.nodes.iter().map(|x| *x)
+    }
+
+    #[inline]
+    #[allow(dead_code)]
+    fn iterate_edges(&'a self) -> impl Iterator<Item = N> + 'a {
+        self.edges.iter().map(|x| *x)
+    }
+
+    pub fn n_nodes(&self) -> usize {
+        self.nodes.len() - 1
+    }
+
+    pub fn n_edges(&self) -> usize {
+        self.edges.len()
+    }
+}
+
+pub struct GraphIterator<'a, N> {
+    graph: &'a Graph<'a, N>,
+    current_node: usize,
+}
+
+impl<'a, N> Iterator for GraphIterator<'a, N>
+where
+    N: ValidGraphType,
+{
+    type Item = &'a [N];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current_node >= self.graph.n_nodes() {
+            return None;
+        };
+
+        let start = self.graph.nodes[self.current_node];
+        let end = self.graph.nodes[self.current_node + 1];
+
+        self.current_node += 1;
+
+        Some(&self.graph.edges.get_data_as_slice()[start..end])
     }
 }
 
@@ -179,7 +224,7 @@ mod tests {
     fn parse_from_file() {
         let edges = vec![(0u32, 1u32), (0, 2), (1, 5), (1, 2), (4, 7)];
 
-        let expected_nodes = vec![0u32, 2, 4, 4, 4, 5, 5, 5, 5];
+        let expected_nodes = vec![0usize, 2, 4, 4, 4, 5, 5, 5, 5];
         let expected_edges = vec![1u32, 2, 5, 2, 7];
 
         let source_file_name = format!("/tmp/tmp_src_{}", rand::random::<u32>());
@@ -215,7 +260,7 @@ mod tests {
             graph
                 .iterate_nodes()
                 .map(|x| x.clone())
-                .collect::<Vec<u32>>(),
+                .collect::<Vec<usize>>(),
             expected_nodes
         );
         assert_eq!(
@@ -231,7 +276,7 @@ mod tests {
     fn parse_from_general_stream() {
         let edges = vec![(0u32, 1u32), (0, 2), (1, 5), (1, 2), (4, 7)];
 
-        let expected_nodes = vec![0u32, 2, 4, 4, 4, 5, 5, 5, 5];
+        let expected_nodes = vec![0usize, 2, 4, 4, 4, 5, 5, 5, 5];
         let expected_edges = vec![1u32, 2, 5, 2, 7];
 
         let destination_folder_name = format!("/tmp/tmp_dst_{}", rand::random::<u32>());
@@ -245,11 +290,13 @@ mod tests {
             Err(e) => panic!("{:?}", e),
         };
 
+        println!("Destionation folder: {}", destination_folder_name);
+
         assert_eq!(
             graph
                 .iterate_nodes()
                 .map(|x| x.clone())
-                .collect::<Vec<u32>>(),
+                .collect::<Vec<usize>>(),
             expected_nodes
         );
         assert_eq!(
@@ -265,7 +312,7 @@ mod tests {
     fn load_u64_graph() {
         let edges = vec![(0u64, 1u64), (0, 2), (1, 5), (1, 2), (4, 7)];
 
-        let expected_nodes = vec![0u64, 2, 4, 4, 4, 5, 5, 5, 5];
+        let expected_nodes = vec![0usize, 2, 4, 4, 4, 5, 5, 5, 5];
         let expected_edges = vec![1u64, 2, 5, 2, 7];
 
         let destination_folder_name = format!("/tmp/tmp_dst_{}", rand::random::<u32>());
@@ -282,7 +329,7 @@ mod tests {
             graph
                 .iterate_nodes()
                 .map(|x| x.clone())
-                .collect::<Vec<u64>>(),
+                .collect::<Vec<usize>>(),
             expected_nodes
         );
 
@@ -298,7 +345,7 @@ mod tests {
     #[test]
     fn test_graph_load() {
         let edges = vec![(0u32, 1u32), (0, 2), (1, 5), (1, 2), (4, 7)];
-        let expected_nodes = vec![0u32, 2, 4, 4, 4, 5, 5, 5, 5];
+        let expected_nodes = vec![0usize, 2, 4, 4, 4, 5, 5, 5, 5];
         let expected_edges = vec![1u32, 2, 5, 2, 7];
 
         let destination_folder_name = format!("/tmp/tmp_dst_{}", rand::random::<u32>());
@@ -321,7 +368,7 @@ mod tests {
             graph
                 .iterate_nodes()
                 .map(|x| x.clone())
-                .collect::<Vec<u32>>(),
+                .collect::<Vec<usize>>(),
             expected_nodes
         );
 
@@ -331,6 +378,40 @@ mod tests {
                 .map(|x| x.clone())
                 .collect::<Vec<u32>>(),
             expected_edges
+        );
+    }
+
+    #[test]
+    fn iterate_graph() {
+        let edges = vec![(0u32, 1u32), (0, 2), (1, 5), (1, 2), (4, 7)];
+        let expected_res = vec![
+            (0usize, vec![1, 2]),
+            (1, vec![5, 2]),
+            (2, vec![]),
+            (3, vec![]),
+            (4, vec![7]),
+            (5, vec![]),
+            (6, vec![]),
+            (7, vec![]),
+        ];
+
+        let destination_folder_name = format!("/tmp/tmp_dst_{}", rand::random::<u32>());
+
+        let graph = match Graph::<u32>::from_adjacency_list(
+            edges.iter().map(|x| Ok(x.clone())),
+            &destination_folder_name,
+        ) {
+            Ok(g) => g,
+            Err(e) => panic!("{:?}", e),
+        };
+
+        assert_eq!(
+            graph
+                .iter()
+                .enumerate()
+                .map(|(i, edges)| (i, edges.to_vec()))
+                .collect::<Vec<(usize, Vec<u32>)>>(),
+            expected_res
         );
     }
 }

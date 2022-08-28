@@ -1,5 +1,5 @@
 pub trait ValidGraphType:
-    Copy + std::str::FromStr + std::cmp::PartialOrd + std::ops::Add<Output = Self>
+    Copy + std::str::FromStr + std::cmp::PartialOrd + std::ops::Add<Output = Self> + TryInto<usize> + std::fmt::Display
 {
     fn zero() -> Self;
     fn one() -> Self;

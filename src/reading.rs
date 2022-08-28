@@ -1,3 +1,4 @@
+use core::panic;
 use std::{
     fs,
     io::{BufReader, BufWriter, Read, Result, Write},
@@ -50,11 +51,11 @@ where
     let mut edges_writer = BufWriter::new(&edges_file);
 
     let mut previous_node = N::zero();
-    let mut edges_count = N::zero();
-    let mut max = N::zero();
+    let mut edges_count = 0usize;
+    let mut max = 0usize;
 
     nodes_writer
-        .write(&N::zero().serialize())
+        .write(&0usize.to_ne_bytes())
         .expect("Failed to write first node");
 
     for e in stream {
@@ -63,8 +64,16 @@ where
             Err(e) => Err(e)?,
         };
 
-        if max < dst {
-            max = dst;
+        let v = {
+            let this = dst.try_into();
+            match this {
+                Ok(t) => t,
+                Err(_) => panic!("Failed to convert to usize: {}", dst),
+            }
+        };
+
+        if max < v {
+            max = v;
         }
 
         // Check if sorted by source
@@ -78,19 +87,27 @@ where
         // Write missing nodes
         while previous_node < src {
             previous_node = previous_node + N::one();
-            nodes_writer.write(&edges_count.serialize())?;
+            nodes_writer.write(&edges_count.to_ne_bytes())?;
         }
 
-        edges_count = edges_count + N::one();
+        edges_count = edges_count + 1;
         previous_node = src;
     }
 
-    let max = max + N::one();
+    let max = max + 1;
 
     // Add nodes until we reach the max node
+    let mut previous_node = {
+        let this = previous_node.try_into();
+        match this {
+            Ok(t) => t,
+            Err(_) => panic!("Failed to convert to usize: {}", previous_node),
+        }
+    };
+
     while previous_node < max {
-        previous_node = previous_node + N::one();
-        nodes_writer.write(&edges_count.serialize())?;
+        previous_node = previous_node + 1;
+        nodes_writer.write(&edges_count.to_ne_bytes())?;
     }
 
     edges_writer.flush()?;
@@ -99,12 +116,7 @@ where
     drop(edges_writer);
     drop(nodes_writer);
 
-    Ok(GraphFiles(
-        nodes_file,
-        edges_file,
-        max.count() + 1,
-        edges_count.count(),
-    ))
+    Ok(GraphFiles(nodes_file, edges_file, max + 1, edges_count))
 }
 
 /// This struct can be used to parse a binary reader into pairs of (T, T).

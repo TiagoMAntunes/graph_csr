@@ -209,4 +209,38 @@ mod tests {
             expected_edges
         );
     }
+
+    #[test]
+    fn load_u64_graph() {
+        let edges = vec![(0u64, 1u64), (0, 2), (1, 5), (1, 2), (4, 7)];
+
+        let expected_nodes = vec![0u64, 2, 4, 4, 4, 5, 5, 5, 5];
+        let expected_edges = vec![1u64, 2, 5, 2, 7];
+        
+        let destination_folder_name = format!("/tmp/tmp_dst_{}", rand::random::<u32>());
+
+        let graph = match Graph::<u64>::from_adjacency_list(
+            edges.iter().map(|x| Ok(x.clone())),
+            &destination_folder_name,
+        ) {
+            Ok(graph) => graph,
+            Err(e) => panic!("{:?}", e),
+        };
+
+        assert_eq!(
+            graph
+                .iterate_nodes()
+                .map(|x| x.clone())
+                .collect::<Vec<u64>>(),
+            expected_nodes
+        );
+
+        assert_eq!(
+            graph
+                .iterate_edges()
+                .map(|x| x.clone())
+                .collect::<Vec<u64>>(),
+            expected_edges
+        );
+    }
 }

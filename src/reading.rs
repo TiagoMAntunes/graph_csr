@@ -59,21 +59,10 @@ where
         .expect("Failed to write first node");
 
     for e in stream {
-        let (src, dst) = match e {
-            Ok((_src, _dst)) => (_src, _dst),
-            Err(e) => Err(e)?,
-        };
+        let (src, dst) = e?;
 
-        let v = {
-            let this = dst.try_into();
-            match this {
-                Ok(t) => t,
-                Err(_) => panic!("Failed to convert to usize: {}", dst),
-            }
-        };
-
-        if max < v {
-            max = v;
+        if max < dst.as_() {
+            max = dst.as_();
         }
 
         // Check if sorted by source
@@ -97,13 +86,7 @@ where
     let max = max + 1;
 
     // Add nodes until we reach the max node
-    let mut previous_node = {
-        let this = previous_node.try_into();
-        match this {
-            Ok(t) => t,
-            Err(_) => panic!("Failed to convert to usize: {}", previous_node),
-        }
-    };
+    let mut previous_node = previous_node.as_();
 
     while previous_node < max {
         previous_node = previous_node + 1;

@@ -1,25 +1,21 @@
+/// This trait is used for convenience in implementing the types accepted by the graph.
+/// The compiler is still rather limited in some aspects of writing generic code in binary format, so this works as a temporary workaround.
+/// It is not expected that anyone will use this trait directly, as u64 will cover most use cases for large graphs.
 pub trait ValidGraphType:
-    Copy + std::str::FromStr + std::cmp::PartialOrd + std::ops::Add<Output = Self> + TryInto<usize> + std::fmt::Display
+    Copy
+    + std::str::FromStr
+    + std::fmt::Display
+    + num_traits::Num
+    + num_traits::AsPrimitive<usize>
+    + std::cmp::PartialOrd
 {
-    fn zero() -> Self;
-    fn one() -> Self;
     fn serialize(&self) -> Vec<u8>;
-    fn count(&self) -> usize;
     fn from_bytes(bytes: &[u8]) -> Self;
 }
 
 impl ValidGraphType for u64 {
-    fn zero() -> Self {
-        0
-    }
-    fn one() -> Self {
-        1
-    }
     fn serialize(&self) -> Vec<u8> {
         Vec::from(self.to_ne_bytes())
-    }
-    fn count(&self) -> usize {
-        *self as usize
     }
     fn from_bytes(bytes: &[u8]) -> Self {
         let mut arr = [0u8; std::mem::size_of::<Self>()];
@@ -32,17 +28,8 @@ impl ValidGraphType for u64 {
 }
 
 impl ValidGraphType for u32 {
-    fn zero() -> Self {
-        0
-    }
-    fn one() -> Self {
-        1
-    }
     fn serialize(&self) -> Vec<u8> {
         Vec::from(self.to_ne_bytes())
-    }
-    fn count(&self) -> usize {
-        *self as usize
     }
     fn from_bytes(bytes: &[u8]) -> Self {
         let mut arr = [0u8; std::mem::size_of::<Self>()];

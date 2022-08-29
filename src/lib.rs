@@ -5,7 +5,9 @@ use reading::reader_to_iter;
 use util::ValidGraphType;
 
 mod reading;
-mod util;
+
+/// A collection of convenient functions and traits to be used across the crate.
+pub mod util;
 
 /// This structure holds a graph in the Compressed Sparse Row format for compression of data size.
 /// This graph is represented via Memory Mapping, allowing the graph to be loaded into memory as required.
@@ -146,6 +148,7 @@ where
     }
 }
 
+/// Iterates over a [Graph] struct and yields pairs of `(node, edge_list)`.
 pub struct GraphIterator<'a, N> {
     graph: &'a Graph<'a, N>,
     current_node: usize,
@@ -416,5 +419,10 @@ mod tests {
                 .collect::<Vec<(usize, Vec<u32>)>>(),
             expected_res
         );
+    }
+
+    #[test]
+    fn invalid() {
+
     }
 }

@@ -116,8 +116,7 @@ where
         Ok(Graph { nodes, edges })
     }
 
-    /// Iterates over the pairs [node, edge_list] in the graph.
-    /// `Node` is the id of the vertex, and `edge_list` is a slice of the edges outgoing from node `node`.
+    /// Returns an iterator over the edge list of each node.
     pub fn iter(&'a self) -> GraphIterator<'a, N> {
         GraphIterator {
             graph: self,
@@ -148,7 +147,7 @@ where
     }
 }
 
-/// Iterates over a [Graph] struct and yields pairs of `(node, edge_list)`.
+/// Iterates over a [Graph] struct and yields the outgoing edge lists of type `&[N]` for each node.
 pub struct GraphIterator<'a, N> {
     graph: &'a Graph<'a, N>,
     current_node: usize,
@@ -422,7 +421,5 @@ mod tests {
     }
 
     #[test]
-    fn invalid() {
-
-    }
+    fn invalid() {}
 }

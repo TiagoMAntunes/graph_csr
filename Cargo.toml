@@ -2,6 +2,10 @@
 name = "graph_csr"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+author = "Tiago Antunes <tiago.melo.antunes@gmail.com>"
+description = "A crate that provides utility functions for manipulating graphs in a CSR format, used as the baseline for constructing powerful graph algorithms."
+repository = "https://github.com/TiagoMAntunes/graph_csr"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

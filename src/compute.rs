@@ -15,8 +15,8 @@ pub struct ComputeGraph<'a, T, DataType> {
     graph: &'a Graph<'a, T>,
     old_active: Vec<bool>, // which nodes are active in the old
     new_active: Vec<bool>, // which nodes are active in the new iteration
-    data1: Vec<DataType>,  // the data associated with each node
-    data2: Vec<DataType>,  // the data associated with each node
+    old_data: Vec<DataType>,  // the data associated with each node
+    new_data: Vec<DataType>,  // the data associated with each node
 }
 
 impl<'a, T, DataType> ComputeGraph<'a, T, DataType>
@@ -31,8 +31,8 @@ where
             graph,
             old_active: vec![false; n_nodes],
             new_active: vec![false; n_nodes],
-            data1: vec![Default::default(); n_nodes],
-            data2: vec![Default::default(); n_nodes],
+            old_data: vec![Default::default(); n_nodes],
+            new_data: vec![Default::default(); n_nodes],
         }
     }
 
@@ -45,7 +45,7 @@ where
     /// Sets a single node's data.
     #[inline]
     pub fn set_data(&mut self, idx: usize, data: DataType) {
-        self.data2[idx] = data;
+        self.new_data[idx] = data;
     }
 
     /// Performs a global iteration step, useful in many algorithms.
@@ -54,13 +54,13 @@ where
     pub fn step(&mut self) {
         // Swap old and new
         std::mem::swap(&mut self.old_active, &mut self.new_active);
-        std::mem::swap(&mut self.data1, &mut self.data2);
+        std::mem::swap(&mut self.old_data, &mut self.new_data);
 
         // Set new all to false
         self.new_active.iter_mut().for_each(|x| *x = false);
-        self.data2
+        self.new_data
             .iter_mut()
-            .zip(self.data1.iter())
+            .zip(self.old_data.iter())
             .for_each(|(x, y)| *x = *y);
     }
 
@@ -80,18 +80,18 @@ where
         self.graph
             .iter()
             .zip(self.old_active.iter_mut())
-            .zip(self.data1.iter())
+            .zip(self.old_data.iter())
             .map(|((edges, active), data)| (edges, active, data))
             .filter(|(_, active, _)| **active)
             .map(|(edges, _, data)| (edges, data))
             .for_each(|(edges, local_data)| {
                 for edge in edges {
                     // Update the data
-                    let old = self.data2[edge.as_()];
-                    func(*local_data, &mut self.data2[edge.as_()]);
+                    let old = self.new_data[edge.as_()];
+                    func(*local_data, &mut self.new_data[edge.as_()]);
 
                     // If it's different than before, then the node is now active
-                    if self.data2[edge.as_()] != old {
+                    if self.new_data[edge.as_()] != old {
                         self.new_active[edge.as_()] = true;
                     }
                 }
@@ -99,7 +99,7 @@ where
     }
 
     pub fn get_data_as_slice(&self) -> &[DataType] {
-        &self.data1
+        &self.old_data
     }
 }
 

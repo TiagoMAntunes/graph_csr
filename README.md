@@ -33,7 +33,19 @@ fn main() {
 }
 ```
 
-And you can now inspect the folder `output`:
+And we can see the following output:
+```
+0 -> [1, 2]
+1 -> [5, 2]
+2 -> []
+3 -> []
+4 -> [7]
+5 -> []
+6 -> []
+7 -> []
+```
+
+You can now inspect the folder `output`:
 ```
 > ls output
 edge.csr  vertex.csr

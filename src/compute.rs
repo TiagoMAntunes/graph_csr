@@ -13,10 +13,10 @@ impl GraphData for f64 {}
 
 pub struct ComputeGraph<'a, T, DataType> {
     graph: &'a Graph<'a, T>,
-    old_active: Vec<bool>, // which nodes are active in the old
-    new_active: Vec<bool>, // which nodes are active in the new iteration
-    old_data: Vec<DataType>,  // the data associated with each node
-    new_data: Vec<DataType>,  // the data associated with each node
+    old_active: Vec<bool>,   // which nodes are active in the old
+    new_active: Vec<bool>,   // which nodes are active in the new iteration
+    old_data: Vec<DataType>, // the data of the old iteration
+    new_data: Vec<DataType>, // the data of the new iteration
 }
 
 impl<'a, T, DataType> ComputeGraph<'a, T, DataType>
@@ -216,7 +216,7 @@ mod tests {
             (6, 7),
             (7, 0),
         ];
-    
+
         let graph = get_graph(edges);
 
         let mut compute = ComputeGraph::<u32, u32>::new(&graph);
@@ -242,10 +242,32 @@ mod tests {
             compute.step();
         }
 
-        assert_eq!(
-            compute.get_data_as_slice(),
-            &vec![0, 1, 2, 3, 4, 5, 6, 7]
-        );
-        
+        assert_eq!(compute.get_data_as_slice(), &vec![0, 1, 2, 3, 4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn wcc() {
+        let graph = get_basic_graph();
+
+        let mut compute = ComputeGraph::<u32, u32>::new(&graph);
+
+        // Initialize the graph
+        // All nodes are ON, and data is the node id
+        for id in 0..graph.n_nodes() {
+            compute.set_active(id, true);
+            compute.set_data(id, id as u32);
+        }
+        compute.step();
+
+        while compute.n_active() > 0 {
+            compute.push(|local, res| {
+                if local < *res {
+                    *res = local;
+                }
+            });
+            compute.step();
+        }
+
+        assert_eq!(compute.get_data_as_slice(), &vec![0, 0, 0, 3, 4, 0, 6, 4]);
     }
 }

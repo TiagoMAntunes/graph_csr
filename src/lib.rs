@@ -6,6 +6,9 @@ use util::ValidGraphType;
 
 mod reading;
 
+/// The generalized computational scheme for running algorithms
+pub mod compute;
+
 /// A collection of convenient functions and traits to be used across the crate.
 pub mod util;
 

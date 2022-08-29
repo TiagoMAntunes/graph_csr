@@ -1,4 +1,3 @@
-use core::panic;
 use std::{
     fs,
     io::{BufReader, BufWriter, Read, Result, Write},

@@ -15,19 +15,6 @@ pub struct Graph<'a, N> {
     edges: EasyMmap<'a, N>,
 }
 
-/// The errors that can occur from using this library
-#[derive(Debug)]
-pub enum GraphError {
-    /// The specified file has not been able to be opened
-    ErrOpeningFile,
-    /// Errors when parsing the source file
-    ParseError,
-    /// Errors when loading the underlying data file
-    LoadError,
-    /// General error when communicating with the filesystem, such as failed to create a directory
-    FsError,
-}
-
 impl<'a, N> Graph<'a, N>
 where
     N: util::ValidGraphType,
@@ -35,10 +22,11 @@ where
 {
     /// Convenience method for reading an input stream in text format.
     /// Each line should contain two numbers, separated by a space.
+    /// The graph will be converted to the underlying CSR representation, and stored in `folder_name`.
     pub fn from_txt_adjacency_list<T>(
         stream: T,
         folder_name: &str,
-    ) -> Result<Graph<'a, N>, GraphError>
+    ) -> Result<Graph<'a, N>, std::io::Error>
     where
         T: Read + Sized,
     {
@@ -61,77 +49,43 @@ where
 
             std::io::Result::Ok((src, dst))
         });
+
         Graph::from_adjacency_list(stream, folder_name)
     }
 
+    /// Same as [from_txt_adjacency](Self::from_txt_adjacency_list), except this time it assumes the edge list to be in binary representation.
+    pub fn from_binary_adjancency<T>(
+        stream: T,
+        destination_folder_name: &str,
+    ) -> Result<Graph<'a, N>, std::io::Error>
+    where
+        T: Read + Sized,
+    {
+        Graph::from_adjacency_list(
+            reader_to_iter::<N, T>(stream).map(|x| std::io::Result::Ok(x)),
+            destination_folder_name,
+        )
+    }
+
     /// Given a SORTED (by source) adjancency list file `source_file_name`, transforms this file
-    /// into the underlying binary representation in CSR and returns a version of the Graph in this format
-    pub fn from_adjacency_list<T>(stream: T, folder_name: &str) -> Result<Graph<'a, N>, GraphError>
+    /// into the underlying binary representation in CSR and returns a version of the Graph in this format.
+    /// The graph will be stored in `folder_name`.
+    pub fn from_adjacency_list<T>(
+        stream: T,
+        folder_name: &str,
+    ) -> Result<Graph<'a, N>, std::io::Error>
     where
         T: Iterator<Item = std::io::Result<(N, N)>> + Sized,
     {
-        let reading::GraphFiles(vertex_file, edge_file, n_vertex, n_edges) =
-            match reading::from_adjacency_list::<N, T>(stream, folder_name) {
-                Ok(g) => Ok(g),
-                Err(e) => match e.kind() {
-                    std::io::ErrorKind::InvalidData => Err(GraphError::ParseError),
-                    _ => Err(GraphError::LoadError),
-                },
-            }?;
+        reading::from_adjacency_list::<N, T>(stream, folder_name)?;
 
-        let nodes = EasyMmapBuilder::<usize>::new()
-            .file(vertex_file)
-            .readable()
-            .capacity(n_vertex)
-            .build();
-        let edges = EasyMmapBuilder::<N>::new()
-            .file(edge_file)
-            .readable()
-            .capacity(n_edges)
-            .build();
-
-        Ok(Graph { nodes, edges })
+        Self::load_graph(folder_name)
     }
 
-    /// Same as `from_txt_adjacency`, except this time it assumes the edge list to be in binary representation
-    pub fn from_binary_adjancency(
-        source_file_name: &str,
-        destination_folder_name: &str,
-    ) -> Result<Graph<'a, N>, GraphError> {
-        // Open the file
-        let reader = std::fs::File::open(source_file_name).or(Err(GraphError::ErrOpeningFile))?;
-
-        // Parse it
-        let reading::GraphFiles(vertex_file, edge_file, n_vertex, n_edges) =
-            match reading::from_adjacency_list(
-                reader_to_iter::<N, std::fs::File>(reader).map(|x| Ok(x)),
-                destination_folder_name,
-            ) {
-                Ok(g) => Ok(g),
-                Err(e) => match e.kind() {
-                    std::io::ErrorKind::InvalidData => Err(GraphError::ParseError),
-                    _ => Err(GraphError::LoadError),
-                },
-            }?;
-
-        let nodes = EasyMmapBuilder::<usize>::new()
-            .file(vertex_file)
-            .readable()
-            .capacity(n_vertex)
-            .build();
-
-        let edges = EasyMmapBuilder::<N>::new()
-            .file(edge_file)
-            .readable()
-            .capacity(n_edges)
-            .build();
-
-        Ok(Graph { nodes, edges })
-    }
-
-    pub fn load_graph(graph_folder: &str) -> Result<Graph<'a, N>, GraphError> {
-        let nodes_file = reading::get_vertex_file(graph_folder).or(Err(GraphError::FsError))?;
-        let edges_file = reading::get_edge_file(graph_folder).or(Err(GraphError::FsError))?;
+    /// Loads a graph from the underlying representation and returns it as a `Graph` struct.
+    pub fn load_graph(graph_folder: &str) -> Result<Graph<'a, N>, std::io::Error> {
+        let nodes_file = reading::get_vertex_file(graph_folder)?;
+        let edges_file = reading::get_edge_file(graph_folder)?;
 
         let nodes = EasyMmapBuilder::<usize>::new()
             .capacity(
@@ -160,6 +114,8 @@ where
         Ok(Graph { nodes, edges })
     }
 
+    /// Iterates over the pairs [node, edge_list] in the graph.
+    /// `Node` is the id of the vertex, and `edge_list` is a slice of the edges outgoing from node `node`.
     pub fn iter(&'a self) -> GraphIterator<'a, N> {
         GraphIterator {
             graph: self,
@@ -179,10 +135,12 @@ where
         self.edges.iter().map(|x| *x)
     }
 
+    /// Returns the number of nodes existing in the graph
     pub fn n_nodes(&self) -> usize {
         self.nodes.len() - 1
     }
 
+    /// Returns the number of edges existing in the graph
     pub fn n_edges(&self) -> usize {
         self.edges.len()
     }
@@ -263,6 +221,51 @@ mod tests {
                 .collect::<Vec<usize>>(),
             expected_nodes
         );
+        assert_eq!(
+            graph
+                .iterate_edges()
+                .map(|x| x.clone())
+                .collect::<Vec<u32>>(),
+            expected_edges
+        );
+    }
+
+    #[test]
+    fn parse_from_binary() {
+        let edges = vec![(0u32, 1u32), (0, 2), (1, 5), (1, 2), (4, 7)];
+        let expected_nodes = vec![0usize, 2, 4, 4, 4, 5, 5, 5, 5];
+        let expected_edges = vec![1u32, 2, 5, 2, 7];
+
+        let destionation_folder_name = format!("/tmp/tmp_dst_{}", rand::random::<u32>());
+
+        let edges_flatten = edges
+            .iter()
+            .flat_map(|x| vec![x.0, x.1])
+            .collect::<Vec<u32>>();
+
+        // Transform into slice of u8 for Read
+        let edges_flatten = unsafe {
+            std::slice::from_raw_parts(
+                edges_flatten.as_ptr() as *const u8,
+                edges_flatten.len() * std::mem::size_of::<u32>(),
+            )
+        };
+
+        let graph =
+            match Graph::<u32>::from_binary_adjancency(edges_flatten, &destionation_folder_name) {
+                Ok(graph) => graph,
+                Err(e) => panic!("{:?}", e),
+            };
+
+        // Check correctness
+        assert_eq!(
+            graph
+                .iterate_nodes()
+                .map(|x| x.clone())
+                .collect::<Vec<usize>>(),
+            expected_nodes
+        );
+
         assert_eq!(
             graph
                 .iterate_edges()

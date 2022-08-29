@@ -1,8 +1,10 @@
+use std::ops::AddAssign;
+
 use super::*;
 
 pub trait Algorithm {}
 
-pub trait GraphData: Copy + Default + Sync {}
+pub trait GraphData: Copy + Default + Sync + AddAssign + PartialEq {}
 
 impl GraphData for u32 {}
 impl GraphData for u64 {}
@@ -13,7 +15,8 @@ pub struct ComputeGraph<'a, T, DataType> {
     graph: &'a Graph<'a, T>,
     old_active: Vec<bool>, // which nodes are active in the old
     new_active: Vec<bool>, // which nodes are active in the new iteration
-    data: Vec<DataType>,   // the data associated with each node
+    data1: Vec<DataType>,  // the data associated with each node
+    data2: Vec<DataType>,  // the data associated with each node
 }
 
 impl<'a, T, DataType> ComputeGraph<'a, T, DataType>
@@ -28,7 +31,8 @@ where
             graph,
             old_active: vec![false; n_nodes],
             new_active: vec![false; n_nodes],
-            data: vec![Default::default(); n_nodes],
+            data1: vec![Default::default(); n_nodes],
+            data2: vec![Default::default(); n_nodes],
         }
     }
 
@@ -41,7 +45,7 @@ where
     /// Sets a single node's data.
     #[inline]
     pub fn set_data(&mut self, idx: usize, data: DataType) {
-        self.data[idx] = data;
+        self.data2[idx] = data;
     }
 
     /// Performs a global iteration step, useful in many algorithms.
@@ -50,9 +54,14 @@ where
     pub fn step(&mut self) {
         // Swap old and new
         std::mem::swap(&mut self.old_active, &mut self.new_active);
+        std::mem::swap(&mut self.data1, &mut self.data2);
 
         // Set new all to false
         self.new_active.iter_mut().for_each(|x| *x = false);
+        self.data2
+            .iter_mut()
+            .zip(self.data1.iter())
+            .for_each(|(x, y)| *x = *y);
     }
 
     /// Returns how many nodes are active in the last iteration.
@@ -61,16 +70,36 @@ where
         self.old_active.iter().filter(|x| **x).count()
     }
 
-    /// Returns an iterator over the nodes which are active.
-    pub fn iter(&mut self) -> impl Iterator<Item = (usize, &[T], &mut bool, &mut DataType)> {
-        // (node, edge_list)
+    /// This is the abstraction over the graph that follows the Think-Like-A-Vertex paradigm.
+    /// `func` must be a function applied from the perspective of a single node.
+    /// Each vertex knows its data and the data of its neighbour, and must return the new value following the algorithm.
+    pub fn push<F>(&mut self, mut func: F)
+    where
+        F: FnMut(DataType, &mut DataType),
+    {
         self.graph
             .iter()
-            .enumerate()
             .zip(self.old_active.iter_mut())
-            .zip(self.data.iter_mut())
-            .map(|(((idx, edges), active), data)| (idx, edges, active, data))
-            .filter(|(_, _, active, _)| **active)
+            .zip(self.data1.iter())
+            .map(|((edges, active), data)| (edges, active, data))
+            .filter(|(_, active, _)| **active)
+            .map(|(edges, _, data)| (edges, data))
+            .for_each(|(edges, local_data)| {
+                for edge in edges {
+                    // Update the data
+                    let old = self.data2[edge.as_()];
+                    func(*local_data, &mut self.data2[edge.as_()]);
+
+                    // If it's different than before, then the node is now active
+                    if self.data2[edge.as_()] != old {
+                        self.new_active[edge.as_()] = true;
+                    }
+                }
+            })
+    }
+
+    pub fn get_data_as_slice(&self) -> &[DataType] {
+        &self.data1
     }
 }
 
@@ -82,11 +111,18 @@ mod tests {
         // Default graph
         let edges = vec![(0u32, 1u32), (0, 2), (1, 5), (1, 2), (4, 7)];
 
+        get_graph(edges)
+    }
+
+    fn get_graph<'a, T>(edge_list: Vec<(T, T)>) -> Graph<'a, T>
+    where
+        T: ValidGraphType,
+    {
         // Generate random filename
         let destination_folder_name = format!("/tmp/tmp_dst_{}", rand::random::<u32>());
 
-        Graph::<u32>::from_adjacency_list(
-            edges
+        Graph::<T>::from_adjacency_list(
+            edge_list
                 .iter()
                 .map(|(src, dst)| Ok((src.clone(), dst.clone()))),
             destination_folder_name.as_str(),
@@ -98,65 +134,118 @@ mod tests {
     fn basic_graph_traversal() {
         let graph = get_basic_graph();
 
-        let mut compute = ComputeGraph::<u32, f32>::new(&graph);
+        let mut compute = ComputeGraph::<u32, u32>::new(&graph);
 
         // Initialize graph
         // All nodes on, and data is 0.5
         for id in 0..graph.n_nodes() {
             compute.set_active(id, true);
-            compute.set_data(id, 0.5);
+            compute.set_data(id, 0);
         }
         compute.step(); // Set data
 
-        // Iterate graph once
-        let v = compute
-            .iter()
-            .map(|(idx, edges, status, value)| (idx, edges, *status, *value))
-            .collect::<Vec<_>>();
+        compute.push(|_, new_res| *new_res += 1);
+        compute.step();
 
-        assert_eq!(
-            v,
-            vec![
-                (0usize, vec![1u32, 2].as_slice(), true, 0.5),
-                (1, vec![5, 2].as_slice(), true, 0.5),
-                (2, vec![].as_slice(), true, 0.5),
-                (3, vec![].as_slice(), true, 0.5),
-                (4, vec![7].as_slice(), true, 0.5),
-                (5, vec![].as_slice(), true, 0.5),
-                (6, vec![].as_slice(), true, 0.5),
-                (7, vec![].as_slice(), true, 0.5),
-            ]
-        );
+        assert_eq!(compute.get_data_as_slice(), &vec![0, 1, 2, 0, 0, 1, 0, 1]);
     }
 
     #[test]
     fn filtered_graph_traversal() {
         let graph = get_basic_graph();
 
-        let mut compute = ComputeGraph::<u32, f32>::new(&graph);
+        let mut compute = ComputeGraph::<u32, u32>::new(&graph);
 
         // Initialize graph
-        // Even nodes are on, and data is 0.5
+        // Even nodes are on, and data is 0
         for id in 0..graph.n_nodes() {
             compute.set_active(id, id % 2 == 0);
-            compute.set_data(id, 0.5);
+            compute.set_data(id, 0);
         }
         compute.step(); // Set data
 
         // Iterate graph once
-        let v = compute
-            .iter()
-            .map(|(idx, edges, status, value)| (idx, edges, *status, *value))
-            .collect::<Vec<_>>();
+        compute.push(|_, new_res| *new_res += 1);
+        compute.step();
+
+        assert_eq!(compute.get_data_as_slice(), &vec![0, 1, 1, 0, 0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn bfs_disconnected() {
+        let graph = get_basic_graph();
+
+        let mut compute = ComputeGraph::<u32, u32>::new(&graph);
+
+        // Initialize the graph
+        // All nodes are off, and data is u32::MAX
+        for id in 0..graph.n_nodes() {
+            compute.set_active(id, false);
+            compute.set_data(id, u32::MAX);
+        }
+
+        // Initialize source
+        compute.set_active(0, true);
+        compute.set_data(0, 0);
+        compute.step(); // Set data
+
+        while compute.n_active() > 0 {
+            compute.push(|local, res| {
+                if local + 1 < *res {
+                    *res = local + 1
+                }
+            });
+            compute.step();
+        }
 
         assert_eq!(
-            v,
-            vec![
-                (0usize, vec![1u32, 2].as_slice(), true, 0.5),
-                (2, vec![].as_slice(), true, 0.5),
-                (4, vec![7].as_slice(), true, 0.5),
-                (6, vec![].as_slice(), true, 0.5),
-            ]
+            compute.get_data_as_slice(),
+            &vec![0, 1, 1, u32::MAX, u32::MAX, 2, u32::MAX, u32::MAX]
         );
+    }
+
+    #[test]
+    fn bfs_cycle() {
+        let edges = vec![
+            (0u32, 1u32),
+            (1, 2),
+            (2, 3),
+            (3, 4),
+            (4, 5),
+            (5, 6),
+            (6, 7),
+            (7, 0),
+        ];
+    
+        let graph = get_graph(edges);
+
+        let mut compute = ComputeGraph::<u32, u32>::new(&graph);
+
+        // Initialize the graph
+        // All nodes are off, and data is u32::MAX
+        for id in 0..graph.n_nodes() {
+            compute.set_active(id, false);
+            compute.set_data(id, u32::MAX);
+        }
+
+        // Initialize source
+        compute.set_active(0, true);
+        compute.set_data(0, 0);
+        compute.step(); // Set data
+
+        while compute.n_active() > 0 {
+            compute.push(|local, res| {
+                if local + 1 < *res {
+                    *res = local + 1
+                }
+            });
+            compute.step();
+        }
+
+        assert_eq!(
+            compute.get_data_as_slice(),
+            &vec![0, 1, 2, 3, 4, 5, 6, 7]
+        );
+        
     }
 }

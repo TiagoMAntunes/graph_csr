@@ -42,7 +42,13 @@ where
     N: util::ValidGraphType,
 {
     // Create directory if does not exist
-    fs::create_dir(destination_folder_name)?;
+    match fs::create_dir(destination_folder_name) {
+        Ok(_) => {},
+        Err(e) => match e.kind() {
+            std::io::ErrorKind::AlreadyExists => {},
+            _ => return Err(e),
+        },
+    }
 
     // Create the files and buffers to write the data to
     let nodes_file = get_vertex_file(destination_folder_name)?;

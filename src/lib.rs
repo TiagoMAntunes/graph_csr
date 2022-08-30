@@ -122,7 +122,8 @@ where
     /// Returns an iterator over the edge list of each node.
     pub fn iter(&'a self) -> GraphIterator<'a, N> {
         GraphIterator {
-            graph: self,
+            nodes: self.nodes.get_data_as_slice(),
+            edges: self.edges.get_data_as_slice(),
             current_node: 0,
         }
     }
@@ -152,7 +153,8 @@ where
 
 /// Iterates over a [Graph] struct and yields the outgoing edge lists of type `&[N]` for each node.
 pub struct GraphIterator<'a, N> {
-    graph: &'a Graph<'a, N>,
+    nodes: &'a [usize],
+    edges: &'a [N],
     current_node: usize,
 }
 
@@ -163,16 +165,16 @@ where
     type Item = &'a [N];
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current_node >= self.graph.n_nodes() {
+        if self.current_node >= self.nodes.len() - 1 {
             return None;
         };
 
-        let start = self.graph.nodes[self.current_node];
-        let end = self.graph.nodes[self.current_node + 1];
+        let start = self.nodes[self.current_node];
+        let end = self.nodes[self.current_node + 1];
 
         self.current_node += 1;
 
-        Some(&self.graph.edges.get_data_as_slice()[start..end])
+        Some(&self.edges[start..end])
     }
 }
 

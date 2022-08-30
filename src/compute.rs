@@ -1,10 +1,11 @@
-use std::ops::AddAssign;
-
 use super::*;
+
+use atomic::Atomic;
+use rayon::prelude::*;
 
 pub trait Algorithm {}
 
-pub trait GraphData: Copy + Default + Sync + AddAssign + PartialEq {}
+pub trait GraphData: Copy + Default + PartialEq + PartialOrd {}
 
 impl GraphData for u32 {}
 impl GraphData for u64 {}
@@ -13,10 +14,10 @@ impl GraphData for f64 {}
 
 pub struct ComputeGraph<'a, T, DataType> {
     graph: &'a Graph<'a, T>,
-    old_active: Vec<bool>,   // which nodes are active in the old
-    new_active: Vec<bool>,   // which nodes are active in the new iteration
-    old_data: Vec<DataType>, // the data of the old iteration
-    new_data: Vec<DataType>, // the data of the new iteration
+    old_active: Vec<Atomic<bool>>, // which nodes are active in the old
+    new_active: Vec<Atomic<bool>>, // which nodes are active in the new iteration
+    old_data: Vec<Atomic<DataType>>, // the data of the old iteration
+    new_data: Vec<Atomic<DataType>>, // the data of the new iteration
 }
 
 impl<'a, T, DataType> ComputeGraph<'a, T, DataType>
@@ -29,23 +30,27 @@ where
         let n_nodes = graph.n_nodes();
         Self {
             graph,
-            old_active: vec![false; n_nodes],
-            new_active: vec![false; n_nodes],
-            old_data: vec![Default::default(); n_nodes],
-            new_data: vec![Default::default(); n_nodes],
+            old_active: (0..n_nodes).map(|_| Atomic::new(false)).collect::<Vec<_>>(),
+            new_active: (0..n_nodes).map(|_| Atomic::new(false)).collect::<Vec<_>>(),
+            old_data: (0..n_nodes)
+                .map(|_| Atomic::new(DataType::default()))
+                .collect::<Vec<_>>(),
+            new_data: (0..n_nodes)
+                .map(|_| Atomic::new(DataType::default()))
+                .collect::<Vec<_>>(),
         }
     }
 
     /// Set a single node as active status.
     #[inline]
     pub fn set_active(&mut self, idx: usize, status: bool) {
-        self.new_active[idx] = status;
+        self.new_active[idx].store(status, atomic::Ordering::Relaxed);
     }
 
     /// Sets a single node's data.
     #[inline]
     pub fn set_data(&mut self, idx: usize, data: DataType) {
-        self.new_data[idx] = data;
+        self.new_data[idx].store(data, atomic::Ordering::Relaxed);
     }
 
     /// Performs a global iteration step, useful in many algorithms.
@@ -57,48 +62,82 @@ where
         std::mem::swap(&mut self.old_data, &mut self.new_data);
 
         // Set new all to false
-        self.new_active.iter_mut().for_each(|x| *x = false);
+        self.new_active
+            .iter_mut()
+            .for_each(|x| x.store(false, atomic::Ordering::Relaxed));
+
         self.new_data
             .iter_mut()
             .zip(self.old_data.iter())
-            .for_each(|(x, y)| *x = *y);
+            .for_each(|(x, y)| {
+                x.store(y.load(atomic::Ordering::Relaxed), atomic::Ordering::Relaxed)
+            });
     }
 
     /// Returns how many nodes are active in the last iteration.
     /// This function calculates the value every time, so it is recommended to store its value.
     pub fn n_active(&self) -> usize {
-        self.old_active.iter().filter(|x| **x).count()
+        self.old_active
+            .iter()
+            .filter(|x| x.load(atomic::Ordering::Relaxed))
+            .count()
     }
 
     /// This is the abstraction over the graph that follows the Think-Like-A-Vertex paradigm.
     /// `func` must be a function applied from the perspective of a single node.
     /// Each vertex knows its data and the data of its neighbour, and must return the new value following the algorithm.
-    pub fn push<F>(&mut self, mut func: F)
+    pub fn push<F>(&mut self, func: F)
     where
-        F: FnMut(DataType, &mut DataType),
+        F: Fn(DataType, &Atomic<DataType>) -> bool,
     {
         self.graph
             .iter()
-            .zip(self.old_active.iter_mut())
+            .zip(self.old_active.iter())
             .zip(self.old_data.iter())
             .map(|((edges, active), data)| (edges, active, data))
-            .filter(|(_, active, _)| **active)
+            .filter(|(_, active, _)| active.load(atomic::Ordering::Relaxed))
             .map(|(edges, _, data)| (edges, data))
             .for_each(|(edges, local_data)| {
                 for edge in edges {
                     // Update the data
-                    let old = self.new_data[edge.as_()];
-                    func(*local_data, &mut self.new_data[edge.as_()]);
-
-                    // If it's different than before, then the node is now active
-                    if self.new_data[edge.as_()] != old {
-                        self.new_active[edge.as_()] = true;
+                    if func(
+                        local_data.load(atomic::Ordering::Relaxed),
+                        &self.new_data[edge.as_()],
+                    ) {
+                        self.new_active[edge.as_()].store(true, atomic::Ordering::Relaxed);
                     }
                 }
             })
     }
 
-    pub fn get_data_as_slice(&self) -> &[DataType] {
+    pub fn par_push<F>(&mut self, func: F)
+    where
+        F: Fn(DataType, &Atomic<DataType>) -> bool + Sync,
+        T: Send + Sync,
+        DataType: Send + Sync,
+    {
+        self.graph
+            .iter()
+            .zip(self.old_active.iter())
+            .zip(self.old_data.iter())
+            .par_bridge()
+            .map(|((edges, active), data)| (edges, active, data))
+            .filter(|(_, active, _)| active.load(atomic::Ordering::Relaxed))
+            .map(|(edges, _, data)| (edges, data))
+            .for_each(|(edges, local_data)| {
+                for edge in edges {
+                    // Update the data
+                    if func(
+                        local_data.load(atomic::Ordering::Relaxed),
+                        &self.new_data[edge.as_()],
+                    ) {
+                        self.new_active[edge.as_()].store(true, atomic::Ordering::Relaxed);
+                    }
+                }
+            })
+    }
+
+    pub fn get_data_as_slice(&self) -> &[Atomic<DataType>] {
         &self.old_data
     }
 }
@@ -144,10 +183,22 @@ mod tests {
         }
         compute.step(); // Set data
 
-        compute.push(|_, new_res| *new_res += 1);
+        compute.par_push(|_, new_res| {
+            let v = new_res.load(atomic::Ordering::Relaxed);
+            new_res.store(v + 1, atomic::Ordering::Relaxed);
+
+            true
+        });
         compute.step();
 
-        assert_eq!(compute.get_data_as_slice(), &vec![0, 1, 2, 0, 0, 1, 0, 1]);
+        assert_eq!(
+            &compute
+                .get_data_as_slice()
+                .iter()
+                .map(|x| x.load(atomic::Ordering::Relaxed))
+                .collect::<Vec<_>>(),
+            &vec![0, 1, 2, 0, 0, 1, 0, 1]
+        );
     }
 
     #[test]
@@ -165,10 +216,22 @@ mod tests {
         compute.step(); // Set data
 
         // Iterate graph once
-        compute.push(|_, new_res| *new_res += 1);
+        compute.par_push(|_, new_res| {
+            let v = new_res.load(atomic::Ordering::Relaxed);
+            new_res.store(v + 1, atomic::Ordering::Relaxed);
+
+            true
+        });
         compute.step();
 
-        assert_eq!(compute.get_data_as_slice(), &vec![0, 1, 1, 0, 0, 0, 0, 1]);
+        assert_eq!(
+            &compute
+                .get_data_as_slice()
+                .iter()
+                .map(|x| x.load(atomic::Ordering::Relaxed))
+                .collect::<Vec<_>>(),
+            &vec![0, 1, 1, 0, 0, 0, 0, 1]
+        );
     }
 
     #[test]
@@ -190,16 +253,24 @@ mod tests {
         compute.step(); // Set data
 
         while compute.n_active() > 0 {
-            compute.push(|local, res| {
-                if local + 1 < *res {
-                    *res = local + 1
+            compute.par_push(|local, res| {
+                if local + 1 < res.load(atomic::Ordering::Relaxed) {
+                    // Some(local + 1)
+                    res.store(local + 1, atomic::Ordering::Relaxed);
+                    true
+                } else {
+                    false
                 }
             });
             compute.step();
         }
 
         assert_eq!(
-            compute.get_data_as_slice(),
+            &compute
+                .get_data_as_slice()
+                .iter()
+                .map(|x| x.load(atomic::Ordering::Relaxed))
+                .collect::<Vec<_>>(),
             &vec![0, 1, 1, u32::MAX, u32::MAX, 2, u32::MAX, u32::MAX]
         );
     }
@@ -234,15 +305,26 @@ mod tests {
         compute.step(); // Set data
 
         while compute.n_active() > 0 {
-            compute.push(|local, res| {
-                if local + 1 < *res {
-                    *res = local + 1
+            compute.par_push(|local, res| {
+                if local + 1 < res.load(atomic::Ordering::Relaxed) {
+                    // Some(local + 1)
+                    res.store(local + 1, atomic::Ordering::Relaxed);
+                    true
+                } else {
+                    false
                 }
             });
             compute.step();
         }
 
-        assert_eq!(compute.get_data_as_slice(), &vec![0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(
+            &compute
+                .get_data_as_slice()
+                .iter()
+                .map(|x| x.load(atomic::Ordering::Relaxed))
+                .collect::<Vec<_>>(),
+            &vec![0, 1, 2, 3, 4, 5, 6, 7]
+        );
     }
 
     #[test]
@@ -260,14 +342,24 @@ mod tests {
         compute.step();
 
         while compute.n_active() > 0 {
-            compute.push(|local, res| {
-                if local < *res {
-                    *res = local;
+            compute.par_push(|local, res| {
+                if local < res.load(atomic::Ordering::Relaxed) {
+                    res.store(local, atomic::Ordering::Relaxed);
+                    true
+                } else {
+                    false
                 }
             });
             compute.step();
         }
 
-        assert_eq!(compute.get_data_as_slice(), &vec![0, 0, 0, 3, 4, 0, 6, 4]);
+        assert_eq!(
+            &compute
+                .get_data_as_slice()
+                .par_iter()
+                .map(|x| x.load(atomic::Ordering::Relaxed))
+                .collect::<Vec<_>>(),
+            &vec![0, 0, 0, 3, 4, 0, 6, 4]
+        );
     }
 }

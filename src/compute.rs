@@ -93,7 +93,6 @@ where
                 for edge in edges {
                     // Update the data
                     if func(&local_data, &self.new_data[edge.as_()]) {
-                        println!("Writing to {}", edge.as_());
                         self.new_active[edge.as_()].store(true, atomic::Ordering::Release);
                     }
                 }

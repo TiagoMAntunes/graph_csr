@@ -85,10 +85,9 @@ where
             .iter()
             .zip(self.old_active.iter())
             .zip(self.old_data.iter())
+            .filter(|((_, active), _)| active.load(atomic::Ordering::Acquire))
+            .map(|((edges, _), data)| (edges, data))
             .par_bridge()
-            .map(|((edges, active), data)| (edges, active, data))
-            .filter(|(_, active, _)| active.load(atomic::Ordering::Acquire))
-            .map(|(edges, _, data)| (edges, data))
             .for_each(|(edges, local_data)| {
                 for edge in edges {
                     // Update the data

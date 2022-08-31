@@ -1,13 +1,21 @@
 fn main() {
-    let input_graph = {
+    let (input_graph, output_file) = {
         let args = std::env::args().skip(1).collect::<Vec<_>>();
 
-        if args.len() != 2 {
-            println!("Usage: bfs <converted graph directory> <src_node>");
+        if args.len() != 1 && args.len() != 2 {
+            println!("Usage: wcc <converted graph directory> [output_file]");
             return;
         }
 
-        args[0].clone()
+        let output = {
+            if args.len() == 2 {
+                Some(args[1].clone())
+            } else {
+                None
+            }
+        };
+
+        (args[0].clone(), output)
     };
 
     let graph = graph_csr::Graph::<u32>::load_graph(&input_graph).unwrap();
@@ -15,8 +23,8 @@ fn main() {
     let mut compute_graph = graph_csr::compute::ComputeGraph::<u32, u32>::new(&graph);
 
     // Initialize
+    compute_graph.fill_active(true);
     for i in 0..graph.n_nodes() {
-        compute_graph.set_active(i, true);
         compute_graph.set_data(i, i as u32);
     }
     compute_graph.step(); // Set data
@@ -51,4 +59,10 @@ fn main() {
         );
     }
     println!("]");
+
+    // Save file
+    if let Some(output_file) = output_file {
+        println!("Saving file to {}", output_file);
+        compute_graph.save_data_to_file(&output_file).unwrap();
+    }
 }

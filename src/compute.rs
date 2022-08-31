@@ -6,6 +6,10 @@ use super::{
 use atomic::Atomic;
 use rayon::prelude::*;
 
+/// This is the compute abstraction over a graph.
+/// It contains an underlying representation of the data that can support running algorithms over it.
+/// Each node contains `DataType` data, and a status indicating whether or not it is active in the next iteration.
+/// Its methods are parallelized using atomics, and will yield good multi-threaded performance.
 pub struct ComputeGraph<'a, T, DataType> {
     graph: &'a Graph<'a, T>,
     old_active: Vec<Atomic<bool>>, // which nodes are active in the old
@@ -35,13 +39,13 @@ where
         }
     }
 
-    /// Set a single node as active status.
+    /// Set a single node's activity in the next iteration as `status`.
     #[inline]
     pub fn set_active(&mut self, idx: usize, status: bool) {
         self.new_active[idx].store(status, atomic::Ordering::Relaxed);
     }
 
-    /// Sets a single node's data.
+    /// Sets a single node's data in the next iteration as `data`.
     #[inline]
     pub fn set_data(&mut self, idx: usize, data: DataType) {
         self.new_data[idx].store(data, atomic::Ordering::Relaxed);
@@ -77,16 +81,22 @@ where
             .count()
     }
 
+    /// This function iterates over the active nodes in the last iteration and applies `func` on them.
+    /// `func` receives two arguments: `old`, which is the last state of the node, and `new`, which is the current state.
     pub fn push<F>(&mut self, func: F)
     where
-        F: Fn(&Atomic<DataType>, &Atomic<DataType>) -> bool + Sync,
-    {   
+        F: Fn(DataType, &Atomic<DataType>) -> bool + Sync,
+    {
         self.graph
             .par_iter()
+            // Compute only those that are active in the last iteration
             .filter(|(idx, _)| self.old_active[*idx].load(atomic::Ordering::Relaxed))
             .for_each(|(idx, edges)| {
+                // Update
                 for edge in edges {
-                    if func(&self.old_data[idx], &self.new_data[edge.as_()]) {
+                    // If update yielded improvement then
+                    if func(self.old_data[idx].load(atomic::Ordering::Relaxed), &self.new_data[edge.as_()]) {
+                        // Mark it as active in the next iteration
                         self.new_active[edge.as_()].store(true, atomic::Ordering::Relaxed);
                     }
                 }
@@ -103,20 +113,19 @@ pub mod helper {
     use super::*;
 
     /// Performs an atomic min function by using atomic operations
-    pub fn atomic_min<T, F>(src: &Atomic<T>, dst: &Atomic<T>, value: F) -> bool
+    pub fn atomic_min<T, F>(src_val: T, dst: &Atomic<T>, value: F) -> bool
     where
         F: Fn(T) -> T,
         T: Copy + std::cmp::PartialOrd + std::fmt::Debug,
     {
-        let src_val = src.load(atomic::Ordering::Relaxed);
-        let mut dst_val = dst.load(atomic::Ordering::Relaxed);
+        let mut dst_val = dst.load(atomic::Ordering::Acquire);
         let mut status = false;
 
         while value(src_val) < dst_val && !status {
             let res = dst.compare_exchange(
                 dst_val,
                 value(src_val),
-                atomic::Ordering::Relaxed,
+                atomic::Ordering::Release,
                 atomic::Ordering::Relaxed,
             );
 

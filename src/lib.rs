@@ -1,6 +1,7 @@
 use std::io::{BufRead, BufReader, Read};
 
 use easy_mmap::{self, EasyMmap, EasyMmapBuilder};
+use rayon::prelude::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use reading::reader_to_iter;
 use util::ValidGraphType;
 
@@ -120,7 +121,18 @@ where
     }
 
     /// Returns an iterator over the edge list of each node.
-    pub fn iter(&'a self) -> GraphIterator<'a, N> {
+    pub fn iter(&'a self) -> impl Iterator<Item = &[N]> + 'a {
+        GraphIterator {
+            nodes: self.nodes.get_data_as_slice(),
+            edges: self.edges.get_data_as_slice(),
+            current_node: 0,
+        }
+    }
+
+    pub fn par_iter(&'a self) -> impl ParallelIterator<Item = (usize, &[N])> + 'a
+    where
+        N: Send + Sync,
+    {
         GraphIterator {
             nodes: self.nodes.get_data_as_slice(),
             edges: self.edges.get_data_as_slice(),
@@ -175,6 +187,29 @@ where
         self.current_node += 1;
 
         Some(&self.edges[start..end])
+    }
+}
+
+impl<'a, N> ParallelIterator for GraphIterator<'a, N>
+where
+    N: ValidGraphType + Send + Sync,
+{
+    type Item = (usize, &'a [N]);
+
+    fn drive_unindexed<C>(self, consumer: C) -> C::Result
+    where
+        C: rayon::iter::plumbing::UnindexedConsumer<Self::Item>,
+    {
+        self.nodes[..self.nodes.len() - 1]
+            .par_iter()
+            .enumerate()
+            .zip(self.nodes[1..].par_iter())
+            .map(|((idx, start), end)| {
+                let start = *start;
+                let end = *end;
+                (idx, &self.edges[start..end])
+            })
+            .drive_unindexed(consumer)
     }
 }
 

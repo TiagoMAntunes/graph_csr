@@ -38,13 +38,13 @@ where
     /// Set a single node as active status.
     #[inline]
     pub fn set_active(&mut self, idx: usize, status: bool) {
-        self.new_active[idx].store(status, atomic::Ordering::Release);
+        self.new_active[idx].store(status, atomic::Ordering::Relaxed);
     }
 
     /// Sets a single node's data.
     #[inline]
     pub fn set_data(&mut self, idx: usize, data: DataType) {
-        self.new_data[idx].store(data, atomic::Ordering::Release);
+        self.new_data[idx].store(data, atomic::Ordering::Relaxed);
     }
 
     /// Performs a global iteration step, useful in many algorithms.
@@ -58,13 +58,13 @@ where
         // Set new all to false
         self.new_active
             .par_iter_mut()
-            .for_each(|x| x.store(false, atomic::Ordering::Release));
+            .for_each(|x| x.store(false, atomic::Ordering::Relaxed));
 
         self.new_data
             .par_iter_mut()
             .zip(self.old_data.par_iter())
             .for_each(|(x, y)| {
-                x.store(y.load(atomic::Ordering::Acquire), atomic::Ordering::Release)
+                x.store(y.load(atomic::Ordering::Relaxed), atomic::Ordering::Relaxed)
             });
     }
 
@@ -73,29 +73,24 @@ where
     pub fn n_active(&self) -> usize {
         self.old_active
             .par_iter()
-            .filter(|x| x.load(atomic::Ordering::Acquire))
+            .filter(|x| x.load(atomic::Ordering::Relaxed))
             .count()
     }
 
     pub fn push<F>(&mut self, func: F)
     where
         F: Fn(&Atomic<DataType>, &Atomic<DataType>) -> bool + Sync,
-    {
+    {   
         self.graph
-            .iter()
-            .zip(self.old_active.iter())
-            .zip(self.old_data.iter())
-            .filter(|((_, active), _)| active.load(atomic::Ordering::Acquire))
-            .map(|((edges, _), data)| (edges, data))
-            .par_bridge()
-            .for_each(|(edges, local_data)| {
+            .par_iter()
+            .filter(|(idx, _)| self.old_active[*idx].load(atomic::Ordering::Relaxed))
+            .for_each(|(idx, edges)| {
                 for edge in edges {
-                    // Update the data
-                    if func(&local_data, &self.new_data[edge.as_()]) {
-                        self.new_active[edge.as_()].store(true, atomic::Ordering::Release);
+                    if func(&self.old_data[idx], &self.new_data[edge.as_()]) {
+                        self.new_active[edge.as_()].store(true, atomic::Ordering::Relaxed);
                     }
                 }
-            })
+            });
     }
 
     pub fn get_data_as_slice(&self) -> &[Atomic<DataType>] {
@@ -113,15 +108,15 @@ pub mod helper {
         F: Fn(T) -> T,
         T: Copy + std::cmp::PartialOrd + std::fmt::Debug,
     {
-        let src_val = src.load(atomic::Ordering::Acquire);
-        let mut dst_val = dst.load(atomic::Ordering::Acquire);
+        let src_val = src.load(atomic::Ordering::Relaxed);
+        let mut dst_val = dst.load(atomic::Ordering::Relaxed);
         let mut status = false;
 
         while value(src_val) < dst_val && !status {
             let res = dst.compare_exchange(
                 dst_val,
                 value(src_val),
-                atomic::Ordering::Release,
+                atomic::Ordering::Relaxed,
                 atomic::Ordering::Relaxed,
             );
 

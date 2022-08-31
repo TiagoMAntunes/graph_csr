@@ -1,20 +1,21 @@
 [package]
-name = "graph_csr"
-version = "1.0.1"
-edition = "2021"
-license = "MIT"
 author = "Tiago Antunes <tiago.melo.antunes@gmail.com>"
-description = "A crate that provides utility functions for manipulating graphs in a CSR format, used as the baseline for constructing powerful graph algorithms."
-repository = "https://github.com/TiagoMAntunes/graph_csr"
-keywords = ["graph", "csr", "algorithms", "performance", "parallel"]
 categories = ["concurrency", "algorithms", "data-structures"]
+description = "A crate that provides utility functions for manipulating graphs in a CSR format, used as the baseline for constructing powerful graph algorithms."
+edition = "2021"
+keywords = ["graph", "csr", "algorithms", "performance", "parallel"]
+license = "MIT"
+name = "graph_csr"
+readme = "README.md"
+repository = "https://github.com/TiagoMAntunes/graph_csr"
+version = "1.0.2"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-easy_mmap = "0.3"
-rand = "0.8.5"
-num-traits = "0.2"
 atomic = "0.5"
-rayon = "1.5"
 byteorder = "1.4"
+easy_mmap = "0.3"
+num-traits = "0.2"
+rand = "0.8.5"
+rayon = "1.5"

@@ -52,3 +52,7 @@ edge.csr  vertex.csr
 ```
 
 The graph is now saved for future use, and there is no need of parsing it again (as it can be time consuming).
+
+For examples on how to compute algorithms, check the [examples](examples/) folder. 
+You can use [a default parser from txt](examples/from_txt.rs) to parse your SORTED graph.
+If you're looking for an example graph, kindly check the [LiveJournal dataset](https://snap.stanford.edu/data/soc-LiveJournal1.html) which is already sorted (but you're required to remove any comment lines from it).

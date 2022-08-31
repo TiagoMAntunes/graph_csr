@@ -6,6 +6,8 @@ license = "MIT"
 author = "Tiago Antunes <tiago.melo.antunes@gmail.com>"
 description = "A crate that provides utility functions for manipulating graphs in a CSR format, used as the baseline for constructing powerful graph algorithms."
 repository = "https://github.com/TiagoMAntunes/graph_csr"
+keywords = ["graph", "csr", "algorithms", "performance", "parallel"]
+categories = ["concurrency", "algorithms", "data-structures"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

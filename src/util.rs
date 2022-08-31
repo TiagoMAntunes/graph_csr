@@ -40,3 +40,11 @@ impl ValidGraphType for u32 {
         u32::from_ne_bytes(arr)
     }
 }
+
+/// The data present in each vertex
+pub trait GraphData: Copy + Default + PartialEq + PartialOrd + Send + Sync {}
+
+impl GraphData for u32 {}
+impl GraphData for u64 {}
+impl GraphData for f32 {}
+impl GraphData for f64 {}

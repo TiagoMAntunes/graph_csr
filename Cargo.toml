@@ -1,6 +1,6 @@
 [package]
 name = "graph_csr"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 license = "MIT"
 author = "Tiago Antunes <tiago.melo.antunes@gmail.com>"
@@ -10,7 +10,7 @@ repository = "https://github.com/TiagoMAntunes/graph_csr"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-easy_mmap = "0.2.3"
+easy_mmap = "0.3"
 rand = "0.8.5"
 num-traits = "0.2"
 atomic = "0.5"

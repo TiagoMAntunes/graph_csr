@@ -1,16 +1,10 @@
-use super::*;
+use super::{
+    util::{GraphData, ValidGraphType},
+    Graph,
+};
 
 use atomic::Atomic;
 use rayon::prelude::*;
-
-pub trait Algorithm {}
-
-pub trait GraphData: Copy + Default + PartialEq + PartialOrd {}
-
-impl GraphData for u32 {}
-impl GraphData for u64 {}
-impl GraphData for f32 {}
-impl GraphData for f64 {}
 
 pub struct ComputeGraph<'a, T, DataType> {
     graph: &'a Graph<'a, T>,
@@ -22,7 +16,7 @@ pub struct ComputeGraph<'a, T, DataType> {
 
 impl<'a, T, DataType> ComputeGraph<'a, T, DataType>
 where
-    T: ValidGraphType,
+    T: ValidGraphType + Send + Sync,
     DataType: GraphData,
 {
     /// Creates a new graph that can run algorithms and can keep track of node data as well as the active nodes.
@@ -44,13 +38,13 @@ where
     /// Set a single node as active status.
     #[inline]
     pub fn set_active(&mut self, idx: usize, status: bool) {
-        self.new_active[idx].store(status, atomic::Ordering::Relaxed);
+        self.new_active[idx].store(status, atomic::Ordering::Release);
     }
 
     /// Sets a single node's data.
     #[inline]
     pub fn set_data(&mut self, idx: usize, data: DataType) {
-        self.new_data[idx].store(data, atomic::Ordering::Relaxed);
+        self.new_data[idx].store(data, atomic::Ordering::Release);
     }
 
     /// Performs a global iteration step, useful in many algorithms.
@@ -63,14 +57,14 @@ where
 
         // Set new all to false
         self.new_active
-            .iter_mut()
-            .for_each(|x| x.store(false, atomic::Ordering::Relaxed));
+            .par_iter_mut()
+            .for_each(|x| x.store(false, atomic::Ordering::Release));
 
         self.new_data
-            .iter_mut()
-            .zip(self.old_data.iter())
+            .par_iter_mut()
+            .zip(self.old_data.par_iter())
             .for_each(|(x, y)| {
-                x.store(y.load(atomic::Ordering::Relaxed), atomic::Ordering::Relaxed)
+                x.store(y.load(atomic::Ordering::Acquire), atomic::Ordering::Release)
             });
     }
 
@@ -78,43 +72,14 @@ where
     /// This function calculates the value every time, so it is recommended to store its value.
     pub fn n_active(&self) -> usize {
         self.old_active
-            .iter()
-            .filter(|x| x.load(atomic::Ordering::Relaxed))
+            .par_iter()
+            .filter(|x| x.load(atomic::Ordering::Acquire))
             .count()
     }
 
-    /// This is the abstraction over the graph that follows the Think-Like-A-Vertex paradigm.
-    /// `func` must be a function applied from the perspective of a single node.
-    /// Each vertex knows its data and the data of its neighbour, and must return the new value following the algorithm.
     pub fn push<F>(&mut self, func: F)
     where
-        F: Fn(DataType, &Atomic<DataType>) -> bool,
-    {
-        self.graph
-            .iter()
-            .zip(self.old_active.iter())
-            .zip(self.old_data.iter())
-            .map(|((edges, active), data)| (edges, active, data))
-            .filter(|(_, active, _)| active.load(atomic::Ordering::Relaxed))
-            .map(|(edges, _, data)| (edges, data))
-            .for_each(|(edges, local_data)| {
-                for edge in edges {
-                    // Update the data
-                    if func(
-                        local_data.load(atomic::Ordering::Relaxed),
-                        &self.new_data[edge.as_()],
-                    ) {
-                        self.new_active[edge.as_()].store(true, atomic::Ordering::Relaxed);
-                    }
-                }
-            })
-    }
-
-    pub fn par_push<F>(&mut self, func: F)
-    where
-        F: Fn(DataType, &Atomic<DataType>) -> bool + Sync,
-        T: Send + Sync,
-        DataType: Send + Sync,
+        F: Fn(&Atomic<DataType>, &Atomic<DataType>) -> bool + Sync,
     {
         self.graph
             .iter()
@@ -122,16 +87,14 @@ where
             .zip(self.old_data.iter())
             .par_bridge()
             .map(|((edges, active), data)| (edges, active, data))
-            .filter(|(_, active, _)| active.load(atomic::Ordering::Relaxed))
+            .filter(|(_, active, _)| active.load(atomic::Ordering::Acquire))
             .map(|(edges, _, data)| (edges, data))
             .for_each(|(edges, local_data)| {
                 for edge in edges {
                     // Update the data
-                    if func(
-                        local_data.load(atomic::Ordering::Relaxed),
-                        &self.new_data[edge.as_()],
-                    ) {
-                        self.new_active[edge.as_()].store(true, atomic::Ordering::Relaxed);
+                    if func(&local_data, &self.new_data[edge.as_()]) {
+                        println!("Writing to {}", edge.as_());
+                        self.new_active[edge.as_()].store(true, atomic::Ordering::Release);
                     }
                 }
             })
@@ -142,8 +105,41 @@ where
     }
 }
 
+/// Helper functions for easier atomics.
+pub mod helper {
+    use super::*;
+
+    /// Performs an atomic min function by using atomic operations
+    pub fn atomic_min<T, F>(src: &Atomic<T>, dst: &Atomic<T>, value: F) -> bool
+    where
+        F: Fn(T) -> T,
+        T: Copy + std::cmp::PartialOrd + std::fmt::Debug,
+    {
+        let src_val = src.load(atomic::Ordering::Acquire);
+        let mut dst_val = dst.load(atomic::Ordering::Acquire);
+        let mut status = false;
+
+        while value(src_val) < dst_val && !status {
+            let res = dst.compare_exchange(
+                dst_val,
+                value(src_val),
+                atomic::Ordering::Release,
+                atomic::Ordering::Relaxed,
+            );
+
+            match res {
+                Ok(_) => status = true,
+                Err(val) => dst_val = val,
+            }
+        }
+        status
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::compute::helper::atomic_min;
+
     use super::*;
 
     fn get_basic_graph<'a>() -> Graph<'a, u32> {
@@ -183,10 +179,8 @@ mod tests {
         }
         compute.step(); // Set data
 
-        compute.par_push(|_, new_res| {
-            let v = new_res.load(atomic::Ordering::Relaxed);
-            new_res.store(v + 1, atomic::Ordering::Relaxed);
-
+        compute.push(|_, new_res| {
+            new_res.fetch_add(1, atomic::Ordering::Relaxed);
             true
         });
         compute.step();
@@ -195,7 +189,7 @@ mod tests {
             &compute
                 .get_data_as_slice()
                 .iter()
-                .map(|x| x.load(atomic::Ordering::Relaxed))
+                .map(|x| x.load(atomic::Ordering::Acquire))
                 .collect::<Vec<_>>(),
             &vec![0, 1, 2, 0, 0, 1, 0, 1]
         );
@@ -216,10 +210,8 @@ mod tests {
         compute.step(); // Set data
 
         // Iterate graph once
-        compute.par_push(|_, new_res| {
-            let v = new_res.load(atomic::Ordering::Relaxed);
-            new_res.store(v + 1, atomic::Ordering::Relaxed);
-
+        compute.push(|_, new_res| {
+            new_res.fetch_add(1, atomic::Ordering::Relaxed);
             true
         });
         compute.step();
@@ -228,7 +220,7 @@ mod tests {
             &compute
                 .get_data_as_slice()
                 .iter()
-                .map(|x| x.load(atomic::Ordering::Relaxed))
+                .map(|x| x.load(atomic::Ordering::Acquire))
                 .collect::<Vec<_>>(),
             &vec![0, 1, 1, 0, 0, 0, 0, 1]
         );
@@ -253,15 +245,7 @@ mod tests {
         compute.step(); // Set data
 
         while compute.n_active() > 0 {
-            compute.par_push(|local, res| {
-                if local + 1 < res.load(atomic::Ordering::Relaxed) {
-                    // Some(local + 1)
-                    res.store(local + 1, atomic::Ordering::Relaxed);
-                    true
-                } else {
-                    false
-                }
-            });
+            compute.push(|local, res| atomic_min(local, res, |v| v + 1));
             compute.step();
         }
 
@@ -269,7 +253,7 @@ mod tests {
             &compute
                 .get_data_as_slice()
                 .iter()
-                .map(|x| x.load(atomic::Ordering::Relaxed))
+                .map(|x| x.load(atomic::Ordering::Acquire))
                 .collect::<Vec<_>>(),
             &vec![0, 1, 1, u32::MAX, u32::MAX, 2, u32::MAX, u32::MAX]
         );
@@ -305,15 +289,7 @@ mod tests {
         compute.step(); // Set data
 
         while compute.n_active() > 0 {
-            compute.par_push(|local, res| {
-                if local + 1 < res.load(atomic::Ordering::Relaxed) {
-                    // Some(local + 1)
-                    res.store(local + 1, atomic::Ordering::Relaxed);
-                    true
-                } else {
-                    false
-                }
-            });
+            compute.push(|local, res| atomic_min(local, res, |v| v + 1));
             compute.step();
         }
 
@@ -321,7 +297,7 @@ mod tests {
             &compute
                 .get_data_as_slice()
                 .iter()
-                .map(|x| x.load(atomic::Ordering::Relaxed))
+                .map(|x| x.load(atomic::Ordering::Acquire))
                 .collect::<Vec<_>>(),
             &vec![0, 1, 2, 3, 4, 5, 6, 7]
         );
@@ -342,14 +318,7 @@ mod tests {
         compute.step();
 
         while compute.n_active() > 0 {
-            compute.par_push(|local, res| {
-                if local < res.load(atomic::Ordering::Relaxed) {
-                    res.store(local, atomic::Ordering::Relaxed);
-                    true
-                } else {
-                    false
-                }
-            });
+            compute.push(|local, res| atomic_min(local, res, |v| v));
             compute.step();
         }
 
@@ -357,7 +326,7 @@ mod tests {
             &compute
                 .get_data_as_slice()
                 .par_iter()
-                .map(|x| x.load(atomic::Ordering::Relaxed))
+                .map(|x| x.load(atomic::Ordering::Acquire))
                 .collect::<Vec<_>>(),
             &vec![0, 0, 0, 3, 4, 0, 6, 4]
         );
